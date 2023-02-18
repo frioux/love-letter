@@ -3,4 +3,4 @@
 set -e
 
 (cd fe; npm run build)
-go build .
+GOOS=linux GOARCH=arm go build .
