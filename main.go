@@ -75,7 +75,6 @@ func save(rw http.ResponseWriter, r *http.Request) {
 		fmt.Fprintln(os.Stderr, err)
 		return
 	}
-	fmt.Println(r.Form.Get("s"))
 
 	p, err := exec.LookPath("papirus-write")
 	if err != nil {
