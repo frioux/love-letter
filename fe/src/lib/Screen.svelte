@@ -3,9 +3,11 @@
 
   let s: string = "example";
 
+   // generating the image takes about 1.1s so
+   // picking half that as debounce time.
    const handleInput = debounce(e => {
       s = e.target.value;
-   }, 1000)
+   }, 550)
 </script>
 
 Rendering: {s}<br>
