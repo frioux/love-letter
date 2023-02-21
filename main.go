@@ -3,14 +3,15 @@ package main
 import (
 	"embed"
 	"fmt"
-	"net/http"
-	"os"
-	"os/exec"
 	"image"
 	"image/color"
 	"image/png"
 	"io"
 	"io/fs"
+	"net/http"
+	"os"
+	"os/exec"
+	"time"
 )
 
 func main() {
@@ -35,6 +36,7 @@ func tryRender(s string, w io.Writer) error {
 }
 
 func fakeRender(s string, w io.Writer) error {
+	time.Sleep(time.Second)
 	i := image.NewGray(image.Rect(0, 0, 200, 96))
 	for x := i.Rect.Min.X; x < i.Rect.Max.X; x++ {
 		for y := i.Rect.Min.Y; y < i.Rect.Max.Y; y++ {
