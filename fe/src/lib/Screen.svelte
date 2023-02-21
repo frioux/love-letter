@@ -2,6 +2,9 @@
   import debounce from 'lodash/debounce';
 
   let s: string = "example";
+  let enc_s: string;
+
+  $: enc_s = encodeURIComponent(s);
 
    // generating the image takes about 1.1s so
    // picking half that as debounce time.
@@ -47,10 +50,9 @@
   }
 </style>
 
-
 <div class="my-img-container">
    {#key s}
-      <img alt="Rendering '{s}'" src="/render/?s={s}" />
+      <img alt="Rendering '{s}'" src="/render/?s={enc_s}" />
    {/key}
 </div>
 
