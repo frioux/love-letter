@@ -4,14 +4,16 @@ import (
 	"embed"
 	"fmt"
 	"image"
-	"image/color"
+	"image/draw"
 	"image/png"
+	"image/color"
 	"io"
 	"io/fs"
 	"net/http"
 	"os"
 	"os/exec"
-	"time"
+
+	"github.com/fogleman/gg"
 )
 
 func main() {
@@ -36,13 +38,18 @@ func tryRender(s string, w io.Writer) error {
 }
 
 func fakeRender(s string, w io.Writer) error {
-	time.Sleep(time.Second)
-	i := image.NewGray(image.Rect(0, 0, 200, 96))
-	for x := i.Rect.Min.X; x < i.Rect.Max.X; x++ {
-		for y := i.Rect.Min.Y; y < i.Rect.Max.Y; y++ {
-			i.Set(x, y, color.White)
-		}
+	c := gg.NewContext(200, 96)
+	c.SetColor(color.White)
+	c.DrawRectangle(0, 0, 200, 96)
+	c.Fill()
+	c.SetColor(color.Black)
+	if err := c.LoadFontFace("/usr/share/fonts/truetype/freefont/FreeMono.ttf", 20); err != nil {
+		return err
 	}
+	c.DrawStringWrapped(s, 0, 0, 0, 0, 200, 1.2, gg.AlignLeft)
+	i := image.NewPaletted(image.Rect(0, 0, 200, 96), color.Palette{color.Black, color.White})
+
+	draw.FloydSteinberg.Draw(i, i.Bounds(), c.Image(), image.ZP)
 	return png.Encode(w, i)
 }
 
