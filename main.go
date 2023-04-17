@@ -91,6 +91,8 @@ func save(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cmd := exec.Command(p, r.Form.Get("s"))
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
 
 	if err := cmd.Run(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -100,6 +102,7 @@ func save(rw http.ResponseWriter, r *http.Request) {
 
 func renderer(rw http.ResponseWriter, r *http.Request) {
 	s := r.URL.Query().Get("s")
+	fmt.Println(s)
 	tryRender(s, rw)
 }
 
@@ -117,5 +120,6 @@ func run() error {
 	}
 	mux.Handle("/", http.FileServer(http.FS(sub)))
 
+	fmt.Println("listening on :8080")
 	return http.ListenAndServe(":8080", mux)
 }
