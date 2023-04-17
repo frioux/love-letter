@@ -8,11 +8,15 @@ import (
 	"image/png"
 	"image/color"
 	"io"
+	"io/ioutil"
 	"io/fs"
 	"net/http"
 	"os"
 	"os/exec"
+	"strings"
 
+	"github.com/golang/freetype/truetype"
+	"golang.org/x/image/font"
 	"github.com/fogleman/gg"
 )
 
@@ -37,16 +41,51 @@ func tryRender(s string, w io.Writer) error {
 	return nil
 }
 
+// hackString replaces known bad characters with possible replacements.
+//
+// As far as I know this is a limitation of Pillows, the image library that
+// papyrus uses to generate images.
+func hackString(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r == '“' || r == '”' {
+			return '"'
+		}
+		if r == '’' {
+			return '\''
+		}
+		return r
+	}, s)
+}
+
+func setFF(c *gg.Context, path string, points float64) error {
+	fontBytes, err := ioutil.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	f, err := truetype.Parse(fontBytes)
+	if err != nil {
+		return err
+	}
+	face := truetype.NewFace(f, &truetype.Options{
+		Size: points,
+		Hinting: font.HintingFull,
+	})
+
+	c.SetFontFace(face)
+
+	return nil
+}
+
 func fakeRender(s string, w io.Writer) error {
 	c := gg.NewContext(200, 96)
 	c.SetColor(color.White)
 	c.DrawRectangle(0, 0, 200, 96)
 	c.Fill()
 	c.SetColor(color.Black)
-	if err := c.LoadFontFace("/usr/share/fonts/truetype/freefont/FreeMono.ttf", 20); err != nil {
+	if err := setFF(c, "/usr/share/fonts/truetype/freefont/FreeMono.ttf", 20); err != nil {
 		return err
 	}
-	c.DrawStringWrapped(s, 0, 0, 0, 0, 200, 1.2, gg.AlignLeft)
+	c.DrawStringWrapped(s, 1, 1, 0, 0, 200, 1, gg.AlignLeft)
 	i := image.NewPaletted(image.Rect(0, 0, 200, 96), color.Palette{color.Black, color.White})
 
 	draw.FloydSteinberg.Draw(i, i.Bounds(), c.Image(), image.ZP)
@@ -90,7 +129,7 @@ func save(rw http.ResponseWriter, r *http.Request) {
 		fmt.Fprintln(os.Stderr, err)
 		return
 	}
-	cmd := exec.Command(p, r.Form.Get("s"))
+	cmd := exec.Command(p, hackString(r.Form.Get("s")))
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
@@ -101,7 +140,7 @@ func save(rw http.ResponseWriter, r *http.Request) {
 }
 
 func renderer(rw http.ResponseWriter, r *http.Request) {
-	s := r.URL.Query().Get("s")
+	s := hackString(r.URL.Query().Get("s"))
 	fmt.Println(s)
 	tryRender(s, rw)
 }
