@@ -2,23 +2,22 @@ package main
 
 import (
 	"embed"
+	"errors"
+	"flag"
 	"fmt"
-	"image"
-	"image/draw"
-	"image/png"
-	"image/color"
 	"io"
-	"io/ioutil"
 	"io/fs"
 	"net/http"
 	"os"
-	"os/exec"
-	"strings"
-
-	"github.com/golang/freetype/truetype"
-	"golang.org/x/image/font"
-	"github.com/fogleman/gg"
+	"path/filepath"
+	"strconv"
+	"sync"
 )
+
+// The panel is 200x96 at one bit per pixel.  Frames are exchanged with the
+// browser in exactly the format the EPD fuse driver's LE/*_inverse files use:
+// row-major, leftmost pixel in the most significant bit, 1 = white.
+const frameSize = 200 * 96 / 8
 
 func main() {
 	if err := run(); err != nil {
@@ -27,138 +26,91 @@ func main() {
 	}
 }
 
-func tryRender(s string, w io.Writer) error {
-	err := realRender(s, w)
-	if err == nil {
-		return nil
-	}
+type screen struct {
+	dir string
 
-	fmt.Fprintf(os.Stderr, "couldn't do realRender, falling back to fakeRender: %s\n", err)
-	if err := fakeRender(s, w); err != nil {
+	// mu serializes panel updates; the driver has a single frame buffer.
+	mu sync.Mutex
+}
+
+func (s *screen) current() ([]byte, error) {
+	return os.ReadFile(filepath.Join(s.dir, "LE", "current_inverse"))
+}
+
+func (s *screen) show(frame []byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if err := os.WriteFile(filepath.Join(s.dir, "LE", "display_inverse"), frame, 0o666); err != nil {
 		return err
 	}
 
-	return nil
+	// The panel's refresh timing depends on temperature, but a broken sensor
+	// shouldn't stop us from updating with whatever the driver last had.
+	if t, err := readTempC(); err != nil {
+		fmt.Fprintf(os.Stderr, "couldn't read temperature: %s\n", err)
+	} else if err := os.WriteFile(filepath.Join(s.dir, "temperature"), []byte(strconv.Itoa(t)), 0o666); err != nil {
+		return err
+	}
+
+	return os.WriteFile(filepath.Join(s.dir, "command"), []byte("U"), 0o222)
 }
 
-// hackString replaces known bad characters with possible replacements.
-//
-// As far as I know this is a limitation of Pillows, the image library that
-// papyrus uses to generate images.
-func hackString(s string) string {
-	return strings.Map(func(r rune) rune {
-		if r == '“' || r == '”' {
-			return '"'
+func (s *screen) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		frame, err := s.current()
+		if err != nil {
+			fail(rw, err, http.StatusInternalServerError)
+			return
 		}
-		if r == '’' {
-			return '\''
+		rw.Header().Set("Content-Type", "application/octet-stream")
+		rw.Header().Set("Cache-Control", "no-store")
+		rw.Write(frame)
+	case http.MethodPut:
+		frame, err := io.ReadAll(http.MaxBytesReader(rw, r.Body, frameSize))
+		if err != nil {
+			fail(rw, err, http.StatusBadRequest)
+			return
 		}
-		return r
-	}, s)
-}
-
-func setFF(c *gg.Context, path string, points float64) error {
-	fontBytes, err := ioutil.ReadFile(path)
-	if err != nil {
-		return err
-	}
-	f, err := truetype.Parse(fontBytes)
-	if err != nil {
-		return err
-	}
-	face := truetype.NewFace(f, &truetype.Options{
-		Size: points,
-		Hinting: font.HintingFull,
-	})
-
-	c.SetFontFace(face)
-
-	return nil
-}
-
-func fakeRender(s string, w io.Writer) error {
-	c := gg.NewContext(200, 96)
-	c.SetColor(color.White)
-	c.DrawRectangle(0, 0, 200, 96)
-	c.Fill()
-	c.SetColor(color.Black)
-	if err := setFF(c, "/usr/share/fonts/truetype/freefont/FreeMono.ttf", 20); err != nil {
-		return err
-	}
-	c.DrawStringWrapped(s, 1, 1, 0, 0, 200, 1, gg.AlignLeft)
-	i := image.NewPaletted(image.Rect(0, 0, 200, 96), color.Palette{color.Black, color.White})
-
-	draw.FloydSteinberg.Draw(i, i.Bounds(), c.Image(), image.ZP)
-	return png.Encode(w, i)
-}
-
-func realRender(s string, w io.Writer) error {
-	p, err := exec.LookPath("papirus-write")
-	if err != nil {
-		return err
-	}
-
-	cmd := exec.Command(p, s)
-	tmp, err := os.CreateTemp("/tmp", "*.png")
-	if err != nil {
-		return err
-	}
-	defer tmp.Close()
-	defer os.Remove(tmp.Name())
-
-	cmd.Env = append(cmd.Env, "TEST_IMAGE="+tmp.Name())
-	if err := cmd.Run(); err != nil {
-		return err
-	}
-
-	if _, err := io.Copy(w, tmp); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func save(rw http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return
-	}
-
-	p, err := exec.LookPath("papirus-write")
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return
-	}
-	cmd := exec.Command(p, hackString(r.Form.Get("s")))
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	if err := cmd.Run(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return
+		if len(frame) != frameSize {
+			fail(rw, fmt.Errorf("frame must be %d bytes, got %d", frameSize, len(frame)), http.StatusBadRequest)
+			return
+		}
+		if err := s.show(frame); err != nil {
+			fail(rw, err, http.StatusInternalServerError)
+			return
+		}
+		fmt.Printf("updated screen for %s\n", r.RemoteAddr)
+		rw.WriteHeader(http.StatusNoContent)
+	default:
+		rw.Header().Set("Allow", "GET, PUT")
+		fail(rw, errors.New("method not allowed"), http.StatusMethodNotAllowed)
 	}
 }
 
-func renderer(rw http.ResponseWriter, r *http.Request) {
-	s := hackString(r.URL.Query().Get("s"))
-	fmt.Println(s)
-	tryRender(s, rw)
+func fail(rw http.ResponseWriter, err error, code int) {
+	fmt.Fprintln(os.Stderr, err)
+	http.Error(rw, err.Error(), code)
 }
 
 //go:embed fe/dist/*
 var assets embed.FS
 
 func run() error {
+	addr := flag.String("addr", ":8080", "address to listen on")
+	epd := flag.String("epd", "/dev/epd", "path to the EPD fuse mount")
+	flag.Parse()
+
 	mux := http.NewServeMux()
 
-	mux.Handle("/render/", http.HandlerFunc(renderer))
-	mux.Handle("/save/", http.HandlerFunc(save))
+	mux.Handle("/api/screen", &screen{dir: *epd})
 	sub, err := fs.Sub(assets, "fe/dist")
 	if err != nil {
 		return err
 	}
 	mux.Handle("/", http.FileServer(http.FS(sub)))
 
-	fmt.Println("listening on :8080")
-	return http.ListenAndServe(":8080", mux)
+	fmt.Printf("listening on %s\n", *addr)
+	return http.ListenAndServe(*addr, mux)
 }
