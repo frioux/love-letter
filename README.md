@@ -9,6 +9,12 @@ message, optionally draw over it with a few basic tools (pencil, line,
 rectangle, fill, eraser), and send it to the screen.  You can also load
 whatever is currently on the screen back into the editor.
 
+The canvas zooms on its own (the buttons under it, or a two-finger pinch and
+drag) so the tools stay on screen.  On a phone, turn on Cursor to stop your
+finger covering the pixel you are after: dragging moves a crosshair like a
+trackpad, a tap plots a dot, and holding Draw with your other thumb draws
+while you drag.  Ctrl/Cmd+Z undoes; Ctrl/Cmd+Shift+Z or Ctrl/Cmd+Y redoes.
+
 The server never renders anything: the browser sends it the finished 200x96
 one-bit frame and the server hands that to the
 [EPD fuse driver](https://github.com/repaper/gratis) at `/dev/epd`.  That
